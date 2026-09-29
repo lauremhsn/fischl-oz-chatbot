@@ -1,0 +1,26 @@
+# Fischl & Oz chatbot -- model configuration
+#
+# Ollama serves every model with a 4096-token context by default, no matter
+# what the base model supports. Llama 3.1 8B supports 128k. That default is
+# not overridable through the OpenAI-compatible endpoint (options passed via
+# extra_body are accepted and then silently ignored), so the context length
+# is baked in here instead.
+#
+# Why 8192 and not 128k: the KV cache lives in VRAM alongside the weights and
+# grows linearly with context length. For this model that is roughly 128 KB
+# per token (32 layers x 8 KV heads x 128 head dim x 2 tensors x 2 bytes).
+# On an 8 GB card holding 4.9 GB of weights:
+#
+#     4,096 tokens  ->  ~0.5 GB cache  ->  ~5.4 GB total
+#     8,192 tokens  ->  ~1.0 GB cache  ->  ~5.9 GB total   <- chosen
+#    16,384 tokens  ->  ~2.0 GB cache  ->  ~6.9 GB total   (tight)
+#    32,768 tokens  ->  ~4.0 GB cache  ->  ~8.9 GB total   (will not fit)
+#
+# Build it with:
+#     ollama create fischl-llama -f Modelfile
+#
+# Verify with `ollama ps` after a request -- the CONTEXT column should read 8192.
+
+FROM llama3.1:8b
+
+PARAMETER num_ctx 8192
