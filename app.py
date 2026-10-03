@@ -6,35 +6,21 @@ Web interface for the Fischl & Oz chatbot.
 Opens on http://127.0.0.1:7860 with Ollama serving fischl-llama locally, so
 nothing leaves the machine and no API key is involved.
 
-WHY THE LAYOUT LOOKS LIKE THIS
-------------------------------
-Fischl and Oz get separate bubbles rather than one combined reply. They are
-two model calls with two system prompts, and showing them as one block would
-hide the prompt chain that produced them. This needs
-`group_consecutive_messages=False`: Gradio merges consecutive same-role
-messages by default, which silently glues the two voices back together.
+Fischl and Oz get separate bubbles rather than one combined reply, because
+they are two model calls with two system prompts. Replies stream in a word at
+a time with a typing indicator in between. The panel on the right shows the
+context state -- window usage, the dossier, the chronicle -- so context
+management is visible rather than invisible until it fails.
 
-Replies stream in a word at a time, with a typing indicator in between, so
-the exchange reads as speech rather than as a page load. The panel on the
-right shows the context state -- window usage, the dossier, the chronicle --
-because context management is invisible until it fails, and a conversation
-that silently forgets is indistinguishable from one that never knew.
+Written against Gradio 6.28, which differs from 5.x examples in four ways:
+`theme` and `css` are arguments to `launch()` rather than `Blocks()`;
+`gr.Chatbot` has no `type=`; `group_consecutive_messages` defaults to True;
+and message HTML is sanitized, so `class` and `style` survive while `width`
+and `height` attributes do not.
 
-GRADIO 6 NOTES
---------------
-Written against Gradio 6.28. Four things that differ from 5.x examples, each
-found by reading the installed signatures rather than guessing:
-  - `theme` and `css` are arguments to `launch()`, not to `Blocks()`.
-  - `gr.Chatbot` has no `type=`. The tuple format is gone and the
-    {"role", "content"} list is the only one.
-  - `group_consecutive_messages` defaults to True.
-  - Message HTML is sanitized: `class` survives, `width`/`height` attributes
-    do not. Avatars are therefore sized from CSS, not from the tag.
-
-The avatars are inline images rather than `avatar_images`, because that
-argument takes a single (user, bot) pair and there are two distinct speakers
-on the bot side. Both are drawn here in SVG -- a crowned eye and a raven --
-so the repo carries no third-party artwork.
+Avatars are inline SVG images rather than `avatar_images`, which takes a
+single (user, bot) pair and cannot distinguish two speakers on the bot side.
+Drawing them here also means the repo carries no third-party artwork.
 """
 
 import base64
@@ -74,14 +60,9 @@ OZ_AV = _uri(OZ_SVG)
 
 def _avatar(uri: str, px: int) -> str:
     """
-    An avatar tag that is the right size without needing the stylesheet.
-
-    Gradio sanitizes message HTML: `width` and `height` attributes are
-    stripped, `class` and `style` are not. Sizing from a CSS class works, but
-    only once the custom stylesheet is in the page -- and a browser holding a
-    cached copy of an earlier version of this app renders a 400px raven
-    instead. Inline styles survive sanitization and cannot miss, so the
-    geometry lives here and the stylesheet only adds animation.
+    An avatar tag sized by inline style rather than by a CSS class or a width
+    attribute, so it renders correctly even against a stale cached stylesheet.
+    The stylesheet below only adds animation.
     """
     return (
         f'<img src="{uri}" style="display:inline-block;width:{px}px;'
@@ -90,9 +71,8 @@ def _avatar(uri: str, px: int) -> str:
     )
 
 
-# Dots are styled inline for the same reason, so a stylesheet that fails to
-# load degrades to three static dots rather than to nothing at all. The CSS
-# below only makes them blink.
+# Styled inline for the same reason, so a stylesheet that fails to load
+# degrades to three static dots rather than to nothing.
 _DOT = (
     '<i style="display:inline-block;width:9px;height:9px;margin-right:5px;'
     'border-radius:50%;background:#c9a7f5"></i>'
@@ -124,15 +104,8 @@ INTRO = (
 
 
 def typing_bubble() -> dict:
-    """
-    The waiting state: a bare bubble of dots, the way a messaging app does it.
-
-    Deliberately carries no avatar and no name. An earlier version showed the
-    speaker's portrait and label while the dots blinked, which announced who
-    was about to talk before they had said anything and made the bubble tall
-    and empty. The portrait now arrives with the first words, so the message
-    itself is the thing that appears.
-    """
+    """The waiting state: a bare bubble of dots, with no avatar and no name, so
+    the portrait arrives with the first words."""
     return {"role": "assistant", "content": TYPING}
 
 
@@ -152,12 +125,22 @@ def oz_bubble(text: str) -> dict:
     }
 
 
+def reasoning_bubble(text: str) -> dict:
+    """The working, above the answer. `metadata={"title": ...}` is what makes
+    Gradio render a message as a titled, collapsible panel."""
+    return {
+        "role": "assistant",
+        "content": text,
+        "metadata": {"title": "✦ Reasoning — the Auge der Verurteilung"},
+    }
+
+
 def context_panel(conversation: Conversation) -> str:
     """Markdown for the side panel: window usage, dossier, chronicle."""
     estimated, actual, _ = last_estimate_error()
 
     # Streamed replies carry no usage block, so fall back to the estimate and
-    # say so rather than silently showing a stale exact figure.
+    # mark it as one.
     used, mark = (actual, "") if actual else (estimated, "≈ ")
     pct = used / CONTEXT_LIMIT * 100 if used else 0.0
 
@@ -196,40 +179,39 @@ def context_panel(conversation: Conversation) -> str:
     return "\n".join(lines)
 
 
-def on_submit(message: str, history: list, conversation: Conversation):
-    """
-    One turn, as a generator so the UI can grow each reply in.
+BUBBLE_FOR = {
+    "reason": reasoning_bubble,
+    "fischl": fischl_bubble,
+    "oz": oz_bubble,
+}
 
-    Shape of the yields: put up the user's message and a bubble of dots, swap
-    the dots for Fischl's message once her first word arrives and grow it,
-    then put up a second bubble of dots while Oz thinks and swap that for his
-    line. The panel only refreshes meaningfully at the end, because the turn
-    is not recorded -- and compaction has not run -- until both stages finish.
+
+def on_submit(message: str, history: list, conversation: Conversation, reasoning: bool):
+    """
+    One turn, as a generator so the interface can grow each reply in.
+
+    `stream_turn` yields (stage, text). A "wait" appends a fresh bubble of
+    dots; any content stage replaces that bubble and keeps replacing it as the
+    text grows.
     """
     message = (message or "").strip()
     if not message:
         yield "", history, conversation, context_panel(conversation)
         return
 
-    history = history + [{"role": "user", "content": message}, typing_bubble()]
+    history = history + [{"role": "user", "content": message}]
     yield "", history, conversation, context_panel(conversation)
 
-    oz_pending = False
-    oz_text = ""
-    for fischl_text, oz_text in stream_turn(conversation, message):
-        if oz_text is None:
-            history[-1] = fischl_bubble(fischl_text)
-        elif oz_text == "":
-            if not oz_pending:
-                history = history + [typing_bubble()]
-                oz_pending = True
-        else:
-            history[-1] = oz_bubble(oz_text)
+    for stage, text in stream_turn(conversation, message, reasoning=reasoning):
+        if stage == "wait":
+            history = history + [typing_bubble()]
+        elif stage in BUBBLE_FOR:
+            history[-1] = BUBBLE_FOR[stage](text)
         yield "", history, conversation, context_panel(conversation)
 
-    # If Oz returned nothing at all, the dots would otherwise blink forever.
-    if history[-1]["content"] == TYPING:
-        history[-1] = oz_bubble(oz_text or "...")
+    # A stage that produced nothing at all would leave its dots blinking.
+    if history and history[-1].get("content") == TYPING:
+        history.pop()
 
     yield "", history, conversation, context_panel(conversation)
 
@@ -242,13 +224,8 @@ def on_clear():
 
 def set_budget(value):
     """
-    Shrink the history budget so compaction can be watched happening.
-
-    At its real value the window holds roughly sixty turns before anything is
-    folded, which makes the chronicle impossible to demonstrate without a very
-    long conversation. Lowering this forces the same machinery to run after a
-    few exchanges. It writes a module-level global, which is fine for a local
-    single-user app and would not be for a shared one.
+    Shrink the history budget so compaction can be watched happening. At its
+    real value the window holds roughly sixty turns before anything is folded.
     """
     try:
         chat.HISTORY_BUDGET = max(150, int(value))
@@ -267,12 +244,9 @@ with gr.Blocks(title="Prinzessin der Verurteilung") as demo:
             chatbot = gr.Chatbot(
                 height=480,
                 show_label=False,
-                # Without this, Fischl's bubble and Oz's are merged into one,
-                # which hides the two-stage chain the app is built around.
+                # Without this, Fischl's bubble and Oz's are merged into one.
                 group_consecutive_messages=False,
-                # No per-message copy/share buttons. They sit under every
-                # bubble and, with two bubbles per turn, produce more controls
-                # than content.
+                # No per-message copy/share buttons.
                 buttons=[],
             )
             with gr.Row():
@@ -283,7 +257,13 @@ with gr.Blocks(title="Prinzessin der Verurteilung") as demo:
                     autofocus=True,
                 )
                 send = gr.Button("Send", variant="primary", scale=1)
-            clear = gr.Button("Begin anew", size="sm")
+            with gr.Row():
+                reasoning = gr.Checkbox(
+                    value=False,
+                    label="Reasoning mode — work it out first, then answer",
+                    scale=4,
+                )
+                clear = gr.Button("Begin anew", size="sm", scale=1)
 
         with gr.Column(scale=1, elem_classes="fischl-panel"):
             panel = gr.Markdown(context_panel(Conversation()))
@@ -298,14 +278,12 @@ with gr.Blocks(title="Prinzessin der Verurteilung") as demo:
                     precision=0,
                 )
 
-    inputs = [box, chatbot, conversation_state]
+    inputs = [box, chatbot, conversation_state, reasoning]
     outputs = [box, chatbot, conversation_state, panel]
 
     # show_progress="hidden" turns off Gradio's own loading treatment, which
-    # dims every output component and overlays a spinner and an elapsed-time
-    # counter for as long as the handler runs. On a streaming generator that
-    # covers the whole exchange, including the typing indicator it is meant to
-    # be replaced by. The typing bubble IS the progress indicator here.
+    # dims every output and overlays a spinner for as long as the handler runs.
+    # The typing bubble is the progress indicator here.
     box.submit(on_submit, inputs, outputs, show_progress="hidden")
     send.click(on_submit, inputs, outputs, show_progress="hidden")
     clear.click(on_clear, None, [chatbot, conversation_state, panel],

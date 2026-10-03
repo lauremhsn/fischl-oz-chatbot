@@ -5,44 +5,23 @@ Two voices, two system prompts, used as two stages of a prompt chain:
 
     user message -> FISCHL (in character) -> OZ (plain gloss)
 
-WHY THESE PROMPTS ARE SHORT
----------------------------
-They were not always. An earlier version ran to roughly 900 words of rules
-for Fischl alone, accumulated by adding a rule each time a reviewer spotted
-something off. The output got steadily worse, and it failed in a consistent
-way: whatever vocabulary appeared in the prompt came back as a tic.
-
-  - Banning the phrase "the appointed hour of reckoning" produced "threads of
-    fate" in its place.
-  - Listing alternative imagery to vary it put "threads" and "tapestry" into
-    every single reply.
-  - Forbidding the model to mention a "chronicle" taught it the word; it then
-    announced a chronicle in turn one, before any chronicle existed.
-  - Telling Oz to vary his opening produced "Mein Fräulein is saying that" in
-    every reply without exception.
-
-A small model does not weigh a long instruction list evenly. It fixates on
-salient terms, and a prohibition is a mention. So this version states the
-minimum, names as few specific phrases as possible, and lets the examples
-carry the register -- examples demonstrate without naming, which is exactly
-what a prohibition cannot do.
-
-CHARACTER NOTES
----------------
 Fischl is a character from Genshin Impact: a teenage girl from Mondstadt,
 really named Amy, who has adopted the persona of a princess from her favourite
 book series. Oz is her night raven familiar, who plays along and translates
-her for everyone else. Register was taken from transcribed voice lines: modern
-grandiose with occasional archaic touches, mixed first and third person, lines
-ranging from a single exclamation to a few sentences, and an act that breaks
-mid-sentence when she is caught off guard.
+her for everyone else. Her register was taken from transcribed voice lines --
+modern grandiose with occasional archaic touches, mixed first and third
+person, lines ranging from a single exclamation to a few sentences, and an act
+that breaks mid-sentence when she is caught off guard.
 
 All example dialogue below is original. None is transcribed from the game.
 
-TECHNIQUES
-----------
-1. Few-shot prompting (FISCHL_FEWSHOT) -- carries register, length range, and
-   the knowledge boundary. Does most of the work here.
+The prompts are short on purpose. A small model fixates on salient terms and a
+prohibition is a mention, so these state the minimum, name as few specific
+phrases as possible, and let the examples carry the register.
+
+Techniques used here:
+1. Few-shot prompting (FISCHL_FEWSHOT, OZ_EXAMPLES) -- carries register,
+   length range, and the knowledge boundary.
 2. Prompt chaining (FISCHL_SYSTEM -> OZ_SYSTEM) -- Oz's reply is a second call
    consuming Fischl's output.
 """
@@ -81,20 +60,6 @@ they never told you, say so, grandly. Never invent a detail of their life.
 
 The performance may crack, but you are always Fischl."""
 
-# The examples carry the register. Each demonstrates one thing:
-#   1  ceremonial greeting, warm
-#   2  a one-line reply is legitimate
-#   3  routine fact, brief, no title
-#   4  arithmetic in digits
-#   5  practical help, accurate, in voice
-#   6  the act breaks mid-sentence
-#   7  kindness, flustered, reframed as a decree
-#   8  something she cannot know
-#   9  something she can and does remember
-#  10  a dull request, welcomed
-#
-# Deliberately: no phrase, image or sentence opening repeats across these ten.
-# Repetition here is what the model amplifies.
 FISCHL_FEWSHOT = [
     {"role": "user", "content": "Hello!"},
     {
@@ -245,17 +210,6 @@ need no name at all.
 Dry, deadpan, unfailingly polite, entirely on her side. Never correct her \
 facts, never comment on her vocabulary, never speak as though you were her."""
 
-# Oz's examples do the heavy lifting, and their BALANCE is the lever. An
-# earlier set of five had two mundane deflations in it; the model took the
-# joke as the method and produced a deflation every turn -- including one
-# about dinner in reply to a question about staying focused, which translated
-# nothing. Examples teach proportion as much as form, so four of the five
-# below are plain translations and only one is a deflation. The deflation is
-# also placed last, so it reads as the exception.
-#
-# The deflation example deliberately avoids food. The previous one mentioned
-# dinner, and the model then mentioned dinner, baking or the oven in four
-# consecutive replies. A specific noun in an example becomes a theme.
 OZ_EXAMPLES = [
     {
         "role": "user",

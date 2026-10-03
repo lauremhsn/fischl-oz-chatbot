@@ -1,28 +1,19 @@
 """
 Chat engine for the Fischl & Oz chatbot.
 
-Owns the model client, the two-stage prompt chain, and the token accounting
-that the context-management layer will sit on top of.
+Two stages, chained:
 
-THE CHAIN
----------
     user message
         -> stage 1: FISCHL  (system + pinned few-shot + history + user)
         -> stage 2: OZ      (system + user message + Fischl's reply)
 
-Stage 2 consumes stage 1's output. Each call has exactly one job, which is
-why this is a chain and not one call asked to produce two voices at once.
-
-WHAT LIVES IN THE CONTEXT WINDOW
---------------------------------
 Every Fischl call assembles the same four parts, in this order:
 
     [ system prompt ][ pinned few-shot ][ conversation history ][ new message ]
       ~350 tokens      ~450 tokens        grows                   varies
 
-Only the third part is allowed to shrink. The few-shot examples are pinned:
-dropping them is what causes the persona to drift, so they must never be the
-thing that gets evicted when space runs short.
+Only the third part shrinks. The few-shot examples are pinned so they are
+never evicted when space runs short.
 """
 
 from dataclasses import dataclass
@@ -34,32 +25,24 @@ from persona import FISCHL_FEWSHOT, FISCHL_SYSTEM, OZ_EXAMPLES, OZ_SYSTEM
 MODEL = "fischl-llama"
 BASE_URL = "http://localhost:11434/v1"
 
-# Must match PARAMETER num_ctx in the Modelfile. The model itself supports
-# 128k; 8192 is what the KV cache will fit in 8 GB of VRAM alongside the
-# weights. See the Modelfile for the arithmetic.
+# Must match PARAMETER num_ctx in the Modelfile. The model supports 128k; 8192
+# is what the KV cache fits in 8 GB of VRAM alongside the weights.
 CONTEXT_LIMIT = 8192
 
-# Room reserved for the model's own reply, so we never fill the window so
-# full that there is nowhere left to generate into.
+# Held back for the model's own reply.
 RESERVED_FOR_REPLY = 512
 
-# Measured fixed overhead: system prompt plus pinned few-shot examples came to
-# 815 prompt tokens on an empty history, of which the first user message was a
-# small part. Rounded up.
+# Measured: system prompt plus pinned few-shot came to 815 prompt tokens on an
+# empty history. Rounded up.
 FIXED_OVERHEAD = 850
 
-# What is left for conversation history and the chronicle.
+# What is left for conversation history, chronicle and dossier.
 HISTORY_BUDGET = CONTEXT_LIMIT - FIXED_OVERHEAD - RESERVED_FOR_REPLY  # 6830
 
-# Once history exceeds the budget, this many of the oldest turns are folded
-# into the chronicle at a time. Summarising in batches rather than one turn at
-# a time avoids paying for a summarisation call on every single message once
-# the window is full.
+# Oldest turns folded into the chronicle per compaction pass.
 SUMMARISE_BATCH = 6
 
-# Turns to always keep verbatim, however full the window gets. Recent context
-# is what the model needs for pronouns and follow-ups to resolve, so it is
-# never summarised away.
+# Most recent turns, never summarised, so follow-ups and pronouns resolve.
 KEEP_VERBATIM = 4
 
 client = OpenAI(base_url=BASE_URL, api_key="ollama")
@@ -77,26 +60,16 @@ class Turn:
 
 def estimate_tokens(text: str) -> int:
     """
-    Rough token count without loading a tokenizer.
-
-    Llama 3.1 uses a 128k-vocabulary BPE tokenizer that we would have to pull
-    in transformers to use properly, which is a heavy dependency for a
-    budgeting heuristic. English averages close to 4 characters per token, so
-    that is the estimate used here.
-
-    This is deliberately an estimate and it is deliberately checked: every
-    call compares it against the true prompt_tokens the server reports, and
-    `last_estimate_error()` exposes the difference. The heuristic errs low on
-    ornate vocabulary and on German, both of which this persona produces in
-    quantity, so the reserve above exists partly to absorb that.
+    Rough token count without loading a tokenizer: English averages close to
+    4 characters per token. Checked against the server's own prompt_tokens on
+    every non-streamed call, and errs high by roughly 2%.
     """
     return len(text) // 4 + 1
 
 
 def count_messages(messages: list[dict]) -> int:
-    """Estimated tokens for a full message list, including per-message overhead."""
-    # Each message carries role and delimiter tokens on top of its content;
-    # 4 per message is the usual approximation.
+    """Estimated tokens for a message list, plus 4 per message for role and
+    delimiter tokens."""
     return sum(estimate_tokens(m["content"]) + 4 for m in messages)
 
 
@@ -108,12 +81,8 @@ _last_actual = 0
 def last_estimate_error() -> tuple[int, int, float]:
     """
     (estimated, actual, percent_error) for the most recent Fischl call.
-
     `actual` is 0 when the server reported no usage, which is always the case
-    for a streamed reply. The estimate is still returned in that case: an
-    earlier version returned (0, 0, 0.0) whenever actual was missing, which
-    silently zeroed the estimate too and left the interface reporting an empty
-    context window on every turn.
+    for a streamed reply.
     """
     if _last_actual == 0:
         return (_last_estimated, 0, 0.0)
@@ -151,20 +120,8 @@ Rules:
 - 8 lines maximum. If you must cut, cut the least specific.
 - Output the dossier only. No preamble, no commentary."""
 
-# The dossier is small and pinned. It is never summarised away, because the
-# chronicle demonstrably cannot be trusted to hold user facts: it records the
-# shape of the conversation, and in testing it kept Fischl's advice while
-# dropping the user's name -- which then produced a bot that denied knowing a
-# name sitting in its own context.
-#
-# The prompt above carries no worked example containing a name. It used to:
-#   - padding. "name: Wren" is a fact; "Wren's name is Wren" states it twice.
-# The model lifted the name straight out of the illustration and filed it as
-# the user's, so anyone who had not introduced themselves was greeted as Wren.
-# This is the same failure as every other example-leak in this project -- a
-# concrete noun in a prompt is a candidate for output -- and it is worth
-# noting that it happened in a prompt with no persona and a temperature of
-# 0.1, which is to say the effect is not a quirk of creative sampling.
+# The dossier is small and pinned, and is never summarised away: the chronicle
+# records the shape of a conversation rather than the user's facts.
 FACTS_MAX_TOKENS = 128
 
 
@@ -217,28 +174,16 @@ that she invoked the sacred oil of routine.
   fits.
 - No headings, no bullet points, no preamble. Output the record only."""
 
-# Hard ceiling on the chronicle, enforced in code rather than trusted to the
-# prompt. 70 words is roughly 95 tokens.
+# 70 words is roughly 95 tokens.
 CHRONICLE_MAX_TOKENS = 160
 CHRONICLE_WORD_CAP = 70
 
 
 def build_chronicle(existing: str, turns: list[Turn]) -> str:
     """
-    Fold a batch of old turns into the running chronicle.
-
-    This is the third prompting technique in the app, and the reason the
-    conversation can outlive its own context window. Turns that get folded in
-    are then dropped from the verbatim history: what survives is the facts,
-    not the phrasing.
-
-    The rewrite-don't-append instruction is emphatic because the first
-    version of this prompt asked for an "updated chronicle" and the model
-    appended a new paragraph every time. The chronicle then grew faster than
-    compaction reclaimed space, and total context went UP after each
-    compaction (392 -> 411 -> 474 tokens in testing) instead of down. A
-    summariser that grows without bound is worse than no summariser, because
-    it fails slowly enough to look like it is working.
+    Fold a batch of old turns into the running chronicle and return the
+    rewritten record. Folded turns are then dropped from verbatim history, so
+    what survives is the facts rather than the phrasing.
     """
     transcript = "\n".join(
         f"Person: {t.user}\nFischl: {t.fischl}" for t in turns
@@ -262,10 +207,6 @@ def build_chronicle(existing: str, turns: list[Turn]) -> str:
     text = response.choices[0].message.content.strip()
 
     # The word limit is enforced here as well as asked for in the prompt.
-    # In testing the model treated 80 words as a target to approach and then
-    # drift past (47 -> 87 words over four folds). A summariser that creeps
-    # past its cap defeats the purpose of having one, and a prompt instruction
-    # is a request, not a guarantee.
     words = text.split()
     if len(words) > CHRONICLE_WORD_CAP:
         text = " ".join(words[:CHRONICLE_WORD_CAP]).rstrip(",;:") + "."
@@ -279,22 +220,16 @@ class Conversation:
     Holds everything that has to fit in the context window, and keeps it
     fitting.
 
-    What happens as the window fills:
-
       1. Each turn adds roughly 105 tokens of history (measured).
-      2. While history stays under HISTORY_BUDGET, nothing is discarded --
-         every turn goes to the model verbatim.
-      3. When history crosses the budget, the oldest SUMMARISE_BATCH turns
-         are folded into the chronicle and dropped from verbatim history.
-         The most recent KEEP_VERBATIM turns are never eligible, so
-         follow-ups and pronouns still resolve against real text.
-      4. The chronicle itself is capped by its own prompt (under 120 words)
-         and is rewritten rather than appended to, so it does not grow without
-         bound the way a transcript does.
+      2. While history stays under HISTORY_BUDGET nothing is discarded.
+      3. Once it crosses the budget, the oldest SUMMARISE_BATCH turns are
+         folded into the chronicle and dropped from verbatim history. The most
+         recent KEEP_VERBATIM turns are never eligible.
+      4. The chronicle is rewritten rather than appended to, and capped at
+         CHRONICLE_WORD_CAP words, so it does not grow without bound.
 
-    The result is that the system prompt and few-shot examples are never the
-    thing that gets evicted. Dropping those is what makes a persona drift, and
-    a naive sliding window over the whole message list would drop them first.
+    The system prompt and few-shot examples are never evicted, which a naive
+    sliding window over the whole message list would do first.
     """
 
     turns: list[Turn]
@@ -321,20 +256,12 @@ class Conversation:
 
     def compact(self) -> int:
         """
-        Fold the oldest turns into the chronicle until the budget is met.
+        Fold the oldest turns into the chronicle until the budget is met, and
+        return the number folded so the interface can report it.
 
-        Returns the number of turns folded, so the caller can tell the user it
-        happened. Silent truncation is how conversations mysteriously lose
-        their memory; this is deliberately observable.
-
-        This loops rather than folding one batch per message. A single fold
-        per turn cannot catch up once the budget is already exceeded -- it
-        reclaims a fixed amount while new turns keep arriving -- so the window
-        creeps past its limit and stays there. The loop also terminates on the
-        KEEP_VERBATIM floor, which means the budget can legitimately be
-        exceeded if the last few turns are enormous on their own. That is the
-        correct failure: better to overrun slightly than to strip the recent
-        context the model needs to resolve a follow-up.
+        The loop also terminates on the KEEP_VERBATIM floor, so the budget can
+        legitimately be exceeded if the last few turns are enormous on their
+        own.
         """
         folded = 0
 
@@ -354,17 +281,12 @@ class Conversation:
 
     def add(self, turn: Turn) -> int:
         """
-        Record a turn, update the dossier, and compact if needed.
+        Record a turn, refresh the dossier, and compact if needed.
 
-        The dossier is refreshed on EVERY turn, not only when compaction runs.
-        It was originally built during compaction, on the reasoning that its
-        job is to rescue facts from turns about to be evicted -- which is
-        true, but meant it stayed empty for the first sixty-odd turns of any
-        real conversation. Someone who says "I like pizza" on turn three and
-        looks at the panel should see it there, not a promise that it will
-        appear once the window fills. The cost is one short extra call per
-        turn, which runs after both voices have finished streaming and so is
-        not in the way of anything the reader is waiting for.
+        The dossier is refreshed on every turn rather than only during
+        compaction, so a fact stated on turn three appears in the panel
+        immediately. The extra call runs after both voices have finished
+        streaming.
         """
         self.turns.append(turn)
         self.facts = build_facts(self.facts, [turn])
@@ -372,18 +294,66 @@ class Conversation:
         return self.last_folded
 
 
+REASONING_SYSTEM = """You work problems out carefully, in plain language, \
+before anyone answers them.
+
+Given the question, write the steps needed to reach the answer. Number them. \
+Be brief -- a few short lines, not an essay. Do arithmetic one step at a time \
+and check each step before moving on. If the question needs no working out, \
+say so in one line.
+
+Finish with a final line in exactly this form:
+
+ANSWER: <the answer, stated plainly>
+
+No character, no flourish, no archaic language. This is working, not speech."""
+
+
+def reasoning_stream(user_message: str, facts: str = "", temperature: float = 0.2):
+    """
+    Optional first stage: work the problem out in a plain voice, before Fischl
+    speaks. Keeps the arithmetic out of the ornate voice, which measurably
+    costs accuracy. Temperature is low because this stage wants the likeliest
+    next token rather than an interesting one.
+    """
+    messages = [{"role": "system", "content": REASONING_SYSTEM}]
+    if facts:
+        messages.append(
+            {"role": "system", "content": f"What you know about them:\n{facts}"}
+        )
+    messages.append({"role": "user", "content": user_message})
+
+    stream = client.chat.completions.create(
+        model=MODEL,
+        messages=messages,
+        temperature=temperature,
+        max_tokens=400,
+        stream=True,
+    )
+
+    text = ""
+    for chunk in stream:
+        if not chunk.choices:
+            continue
+        delta = chunk.choices[0].delta.content
+        if delta:
+            text += delta
+            yield text
+
+
 def build_fischl_messages(
     history: list[Turn],
     user_message: str,
     chronicle: str = "",
     facts: str = "",
+    reasoning: str = "",
 ) -> list[dict]:
     """
     Assemble the message list for a Fischl call.
 
-    Order matters. The dossier and chronicle sit after the few-shot examples
-    and before the verbatim history, so they read as established background
-    rather than as dialogue the model is being asked to continue.
+    The dossier and chronicle sit after the few-shot examples and before the
+    verbatim history, so they read as established background rather than as
+    dialogue to continue.
     """
     messages = [{"role": "system", "content": FISCHL_SYSTEM}]
     messages.extend(FISCHL_FEWSHOT)
@@ -415,9 +385,26 @@ def build_fischl_messages(
             }
         )
 
+    # Only Fischl's replies go back into history, never Oz's gloss and never a
+    # reasoning trace: those are derived from her turn rather than part of the
+    # conversation.
     for turn in history:
         messages.append({"role": "user", "content": turn.user})
         messages.append({"role": "assistant", "content": turn.fischl})
+
+    if reasoning:
+        messages.append(
+            {
+                "role": "system",
+                "content": (
+                    "You have already worked this out, privately:\n\n"
+                    f"{reasoning}\n\n"
+                    "Announce that conclusion in your own voice. The figures "
+                    "above are correct — carry them across exactly as they "
+                    "stand and do not work them out again."
+                ),
+            }
+        )
 
     messages.append({"role": "user", "content": user_message})
     return messages
@@ -428,12 +415,16 @@ def fischl_reply(
     user_message: str,
     chronicle: str = "",
     facts: str = "",
+    reasoning: str = "",
     temperature: float = 0.8,
 ) -> str:
-    """Stage 1: the in-character reply."""
+    """Stage 1: the in-character reply. Parameters are kept in step with
+    `fischl_reply_stream`."""
     global _last_estimated, _last_actual
 
-    messages = build_fischl_messages(history, user_message, chronicle, facts)
+    messages = build_fischl_messages(
+        history, user_message, chronicle, facts, reasoning
+    )
     _last_estimated = count_messages(messages)
 
     response = client.chat.completions.create(
@@ -453,33 +444,12 @@ def oz_reply(user_message: str, fischl_text: str, temperature: float = 0.7) -> s
     """
     Stage 2: Oz.
 
-    Deliberately does NOT receive the conversation history. His job is to
-    respond to one reply, and giving him the backlog invites him to summarise
-    the conversation instead of answering the turn in front of him.
-
-    Temperature is 0.7, not the 0.3 it was for several rounds. Low temperature
-    was chosen on the theory that this stage should be faithful rather than
-    creative -- but faithful and bland turned out to be the same setting. At
-    0.3 the model picked the most probable phrasing every time, which for a
-    restatement task is "She says that you should...", and it produced that
-    shape in thirteen consecutive turns while ignoring six few-shot examples
-    that did no such thing. Sampling temperature was quietly overriding the
-    examples. Character lives in the less-probable choice, so this stage needs
-    room to make one.
-
-    An earlier version also gave Oz a verification mandate -- correct her if
-    she got a fact wrong -- on the theory that a second pass would catch
-    errors the ornate first pass introduced. It failed badly. Told to look for
-    errors, the model invented them: it "corrected" her about her own Vision
-    with fabricated lore, criticised her prose style instead of translating,
-    and in one case emitted no translation at all. An 8B model asked to
-    find mistakes will produce mistakes to find.
-
-    Oz gets few-shot examples of his own for the same reason Fischl does.
-    Instructing him to vary his opening produced "Mein Fräulein is saying
-    that" in every single reply -- naming any opening in the prompt made that
-    opening universal. The examples below show three different shapes,
-    including a one-word answer, without naming any of them.
+    Receives one user message and one reply, and deliberately not the
+    conversation history, which would invite him to summarise the conversation
+    instead of answering the turn in front of him. Temperature is 0.7 because
+    at 0.3 the model picked the most probable restatement every time and
+    ignored the few-shot examples. He gets examples of his own for the same
+    reason Fischl does.
     """
     messages = [{"role": "system", "content": OZ_SYSTEM}]
     messages.extend(OZ_EXAMPLES)
@@ -520,19 +490,10 @@ def respond(conversation: Conversation, user_message: str) -> Turn:
 # Streaming variants, used by the web UI
 # --------------------------------------------------------------------------
 #
-# The blocking `respond` above is what the diagnostics use: it is simpler to
-# reason about and it reports exact prompt_tokens from the server. The UI uses
-# the streaming pair below instead, because a reply that appears a word at a
-# time reads as speech, and one that appears all at once after a long pause
-# reads as a page load.
-#
-# The tradeoff is token accounting. A streamed response carries no usage
-# block, so the exact prompt_tokens the server counted is not available until
-# the stream ends -- and Ollama does not return one at all. The UI therefore
-# falls back to the 4-chars-per-token estimate and labels it with a "≈".
-# That estimate was measured against the server's own count at roughly +2%,
-# erring high, so the meter slightly over-reports rather than hiding an
-# overflow.
+# The diagnostics use the blocking `respond` above, which reports exact
+# prompt_tokens from the server. The UI uses the streaming pair below so a
+# reply appears a word at a time. A streamed response carries no usage block,
+# so the UI falls back to the 4-chars-per-token estimate and labels it "≈".
 
 
 def fischl_reply_stream(
@@ -540,12 +501,15 @@ def fischl_reply_stream(
     user_message: str,
     chronicle: str = "",
     facts: str = "",
+    reasoning: str = "",
     temperature: float = 0.8,
 ):
     """Stage 1, yielding the reply text as it grows."""
     global _last_estimated, _last_actual
 
-    messages = build_fischl_messages(history, user_message, chronicle, facts)
+    messages = build_fischl_messages(
+        history, user_message, chronicle, facts, reasoning
+    )
     _last_estimated = count_messages(messages)
     _last_actual = 0  # no usage block arrives with a stream
 
@@ -596,34 +560,49 @@ def oz_reply_stream(user_message: str, fischl_text: str, temperature: float = 0.
             yield text
 
 
-def stream_turn(conversation: Conversation, user_message: str):
+def stream_turn(conversation: Conversation, user_message: str, reasoning: bool = False):
     """
-    Run the chain, yielding (fischl_so_far, oz_so_far) as each stage streams.
+    Run the chain, yielding (stage, text) as it goes.
 
-    `oz_so_far` has three states, which is how the UI knows what to draw:
-        None  -- Fischl is still speaking
-        ""    -- Fischl has finished, Oz has been asked and is thinking
-        text  -- Oz is speaking
+        ("wait",   name)  -- a call has been made and nothing has come back
+                             yet; the interface shows a typing indicator
+        ("reason", text)  -- the plain-voice working, growing (reasoning mode)
+        ("fischl", text)  -- her reply, growing
+        ("oz",     text)  -- his gloss, growing
+        ("done",   "")    -- turn recorded, dossier updated, compaction run
 
-    The empty-string state exists because the gap before Oz's first token is
-    dead air inside `oz_reply_stream`, and nothing would be yielded during it.
-    Announcing the gap explicitly is what lets the interface show a second
-    typing indicator instead of freezing on Fischl's finished reply.
-
-    The turn is recorded and compaction runs only once both stages finish, so
-    a half-generated exchange never enters the history.
+    The turn is recorded, the dossier updated and compaction run only once
+    every stage has finished, so a half-generated exchange never enters
+    history.
     """
+    reasoning_text = ""
+    if reasoning:
+        yield "wait", "reason"
+        for reasoning_text in reasoning_stream(user_message, conversation.facts):
+            yield "reason", reasoning_text
+
+    yield "wait", "fischl"
     fischl_text = ""
     for fischl_text in fischl_reply_stream(
-        conversation.turns, user_message, conversation.chronicle, conversation.facts
+        conversation.turns,
+        user_message,
+        conversation.chronicle,
+        conversation.facts,
+        reasoning_text,
     ):
-        yield fischl_text, None
+        yield "fischl", fischl_text
 
-    yield fischl_text, ""
-
+    yield "wait", "oz"
     oz_text = ""
     for oz_text in oz_reply_stream(user_message, fischl_text):
-        yield fischl_text, oz_text
+        yield "oz", oz_text
 
-    conversation.add(Turn(user=user_message, fischl=fischl_text, oz=oz_text))
-    yield fischl_text, oz_text
+    conversation.add(
+        Turn(
+            user=user_message,
+            fischl=fischl_text,
+            oz=oz_text,
+            reasoning=reasoning_text,
+        )
+    )
+    yield "done", ""
