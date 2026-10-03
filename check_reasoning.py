@@ -26,11 +26,18 @@ from chat import Conversation, fischl_reply, reasoning_stream
 RUNS = 4
 
 # (question, acceptable answer fragments)
+#
+# Both digit and spelled-out forms are accepted. The first version of this
+# checked only for digits, which scored a correct "twenty-eight" or "sixty-six"
+# as a failure -- and because the persona spells numbers out far more often
+# with reasoning OFF, that bug inflated the apparent benefit of reasoning mode.
+# A measurement bug that flatters the thing being measured is the dangerous
+# kind. Same trap as check_accuracy.py; fixed there first.
 CASES = [
     (
         "A shelf has 3 rows of 7 books. I take 5 away, then add 12. "
         "How many books are on the shelf now?",
-        ["28"],
+        ["28", "twenty-eight", "twenty eight"],
     ),
     (
         "I am 3 times as old as my sister. In 6 years I will be twice her age. "
@@ -40,7 +47,7 @@ CASES = [
     (
         "A train leaves at 14:25 and the journey takes 3 hours and 50 minutes. "
         "What time does it arrive?",
-        ["18:15", "6:15", "quarter past six"],
+        ["18:15", "18.15", "6:15", "quarter past six", "six fifteen"],
     ),
     (
         "If 5 machines take 5 minutes to make 5 widgets, how long do 100 "
@@ -51,12 +58,12 @@ CASES = [
         "A jacket costs 80 dollars. It is discounted 25 percent, then a "
         "further 10 percent is taken off the sale price. What is the final "
         "price?",
-        ["54"],
+        ["54", "fifty-four", "fifty four"],
     ),
     (
         "There are 12 people at a party and everyone shakes hands with "
         "everyone else exactly once. How many handshakes happen?",
-        ["66"],
+        ["66", "sixty-six", "sixty six"],
     ),
 ]
 
