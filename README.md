@@ -177,6 +177,13 @@ The notebook also walks through the persona, the context-management machinery
 and the reasoning-mode comparison with live output, then launches the app with
 a public link.
 
+> **Before sharing a link, restart the session.** *Runtime → Restart session*,
+> then run top to bottom. Re-running only the launch cell prints a URL that
+> looks new but is not: Gradio's tunnel client (`frpc`) starts once per session,
+> so the subdomain stays registered to the server you already tore down and the
+> link answers *"No interface is running right now."* `demo.close()` does not
+> help — it closes the server and leaves the tunnel standing.
+
 ---
 
 ## Why this model
@@ -259,6 +266,15 @@ The same effect appeared at temperature 0.1 in a prompt with no persona at all:
 the dossier prompt once contained `name: Wren` as a worked example, and the
 model filed "Wren" as the user's actual name. Any concrete noun in a prompt is a
 candidate for output.
+
+Temperature 0.1 caused a second, harder failure in the same prompt. With no
+legal way to say "nothing to record", the model looped until the server aborted
+the generation — `token repeat limit reached`, which surfaced in the interface
+as a bare *"Error"* toast that cleared only on the next message. Three changes
+fixed it: the prompt now states that **an empty dossier is a valid answer**,
+sampling moved to temperature 0.35 with a 0.6 frequency penalty, and
+`Conversation.add` catches the failure into `last_error` rather than letting it
+break the turn.
 
 ### 2. Prompt chaining
 
@@ -348,7 +364,7 @@ the recent context the model needs to resolve a follow-up.
 |---|---|---|
 | Holds | stable facts the person stated | what has happened in the conversation |
 | Updated | every turn | only during compaction |
-| Size | 8 lines max | 70 words max |
+| Size | 10 lines max | 70 words max |
 | Evicted? | never | rewritten each fold |
 
 They are separate because the chronicle demonstrably cannot be trusted to hold
@@ -364,8 +380,9 @@ there.
 
 ### The word cap is enforced in code
 
-`build_chronicle` truncates to 70 words after the call, in addition to asking
-for it in the prompt. Two reasons, both measured:
+`build_chronicle` truncates to 70 words after the call, on top of the 80-word
+limit the prompt asks for. The gap is deliberate — the prompt sets a target,
+the code sets the ceiling. Two reasons, both measured:
 
 - Asked for an "updated chronicle", the model **appended** a new paragraph every
   time. Total context went *up* after each compaction — 392 → 411 → 474 tokens —
@@ -503,6 +520,14 @@ Stated plainly rather than hidden.
   slightly rather than hiding an overflow.
 - **The chronicle is lossy by design.** It keeps facts and discards phrasing.
   Something said once in passing sixty turns ago may not survive.
+- **The dossier is occasionally over-eager.** It is told to record only what the
+  person stated about themselves, and mostly it does — but it will now and then
+  file a request as a fact, or an inference rather than a statement. Four rounds
+  of prompt revision got it this far, each one removing something the prompt
+  itself had taught the model to produce.
+- **Public links are third-party infrastructure.** `share=True` routes through
+  `gradio.live`, which is outside this project and intermittently unreliable.
+  `python app.py` on `127.0.0.1` has never failed.
 - **An 8B model is an 8B model.** It can state something confidently wrong.
   Reasoning mode helps on multi-step problems; it is not a correctness
   guarantee.
