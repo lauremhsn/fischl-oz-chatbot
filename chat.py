@@ -103,6 +103,21 @@ work and circumstances:
 - ongoing commitments, constraints and circumstances
 - stated preferences and decisions
 
+A fact is something the person said is TRUE OF THEM. Nothing else qualifies.
+
+Apply this test to every line before writing it — did they state this about \
+themselves?
+
+  "my name is <name>"        -> yes. Write it as: name: <name>
+  "I'm a second-year"        -> yes.
+  "I keep putting this off"  -> yes.
+  "write me a sort routine"  -> no. That is a request.
+  "how do I stay focused?"   -> no. That is a question.
+  "your bird is strange"     -> no. That is about someone else.
+
+Write each line as a plain statement in your own words. Use no field labels, \
+no categories and no colons. The one exception is the "name: " line.
+
 DO NOT RECORD:
 - anything they asked for or told you to do. A question, a request and an \
 instruction are alike here: they describe what the person WANTS, not what the \
