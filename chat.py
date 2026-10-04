@@ -236,12 +236,14 @@ class Conversation:
     chronicle: str = ""
     facts: str = ""
     last_folded: int = 0
+    last_error: str = ""
 
     def __init__(self) -> None:
         self.turns = []
         self.chronicle = ""
         self.facts = ""
         self.last_folded = 0
+        self.last_error = ""
 
     def history_tokens(self) -> int:
         """Estimated tokens currently held by history, chronicle and dossier."""
@@ -289,8 +291,17 @@ class Conversation:
         streaming.
         """
         self.turns.append(turn)
-        self.facts = build_facts(self.facts, [turn])
-        self.last_folded = self.compact()
+        self.last_error = ""
+        try:
+            self.facts = build_facts(self.facts, [turn])
+        except Exception as exc:
+            self.last_error = f"dossier update failed — {type(exc).__name__}: {exc}"
+
+        try:
+            self.last_folded = self.compact()
+        except Exception as exc:
+            self.last_error = f"compaction failed — {type(exc).__name__}: {exc}"
+
         return self.last_folded
 
 

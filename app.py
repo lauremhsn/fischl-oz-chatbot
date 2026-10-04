@@ -506,6 +506,9 @@ def context_panel(conversation: Conversation) -> str:
             f"into the chronicle"
         )
 
+    if getattr(conversation, "last_error", ""):
+        lines.append(f"**⚠ {conversation.last_error}**")
+
     lines += ["", "### What she remembers about you"]
     if conversation.facts:
         lines += [f"- {ln}" for ln in conversation.facts.splitlines() if ln.strip()]
