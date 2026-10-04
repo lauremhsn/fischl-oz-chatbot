@@ -96,27 +96,19 @@ conversation. You will be given the current dossier and some new exchanges.
 Output the updated dossier as plain lines, one fact per line, no bullets or \
 numbering.
 
-RECORD ONLY stable facts the person stated about THEMSELVES — their own life, \
-work and circumstances:
-- their name, if they gave one, recorded as "name: " followed by it
-- what they are working on, studying, building or dealing with
-- ongoing commitments, constraints and circumstances
-- stated preferences and decisions
-
 A fact is something the person said is TRUE OF THEM. Nothing else qualifies.
 
-Apply this test to every line before writing it — did they state this about \
-themselves?
+Before writing any line, ask whether the person stated it about themselves. A \
+name they gave, a subject they study, a habit they admit to, a thing they say \
+they like — yes. A request, a question, or a remark about someone else — no.
 
-  "my name is <name>"        -> yes. Write it as: name: <name>
-  "I'm a second-year"        -> yes.
-  "I keep putting this off"  -> yes.
-  "write me a sort routine"  -> no. That is a request.
-  "how do I stay focused?"   -> no. That is a question.
-  "your bird is strange"     -> no. That is about someone else.
-
-Write each line as a plain statement in your own words. Use no field labels, \
-no categories and no colons. The one exception is the "name: " line.
+OUTPUT RULES, strictly:
+- Write only the dossier lines themselves, one fact per line.
+- Never explain what you added, removed or kept. Never write a line in \
+brackets or parentheses describing your own decision. If a line should not be \
+recorded, simply do not write it.
+- Plain statements in your own words. No field labels, no categories, no \
+colons — the one exception is the "name: " line.
 
 DO NOT RECORD:
 - anything they asked for or told you to do. A question, a request and an \
@@ -140,12 +132,12 @@ Many conversations never produce a single fact, and that is correct.
 Rules:
 - Merge new information into existing lines rather than adding duplicates.
 - If a fact was corrected, keep the corrected version only.
-- 8 lines maximum. If you must cut, cut the least specific.
+- 10 lines maximum. If you must cut, cut the least specific.
 - Output the dossier only. No preamble, no commentary."""
 
 # The dossier is small and pinned, and is never summarised away: the chronicle
 # records the shape of a conversation rather than the user's facts.
-FACTS_MAX_TOKENS = 128
+FACTS_MAX_TOKENS = 220
 
 
 def build_facts(existing: str, turns: list[Turn]) -> str:
