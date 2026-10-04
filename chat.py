@@ -118,6 +118,10 @@ do the person's remarks about them.
 NEVER invent a value. If the person has not told you their name, the dossier
 has no name line at all. Do not fill a field with a plausible placeholder.
 
+AN EMPTY DOSSIER IS A VALID ANSWER. If the person has stated nothing about
+themselves, output nothing at all — no lines, no explanation, no apology.
+Many conversations never produce a single fact, and that is correct.
+
 Rules:
 - Merge new information into existing lines rather than adding duplicates.
 - If a fact was corrected, keep the corrected version only.
@@ -145,7 +149,8 @@ def build_facts(existing: str, turns: list[Turn]) -> str:
             {"role": "system", "content": FACTS_SYSTEM},
             {"role": "user", "content": prompt},
         ],
-        temperature=0.1,
+        temperature=0.35,
+        frequency_penalty=0.6,
         max_tokens=FACTS_MAX_TOKENS,
     )
     return response.choices[0].message.content.strip()
