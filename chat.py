@@ -96,19 +96,23 @@ conversation. You will be given the current dossier and some new exchanges.
 Output the updated dossier as plain lines, one fact per line, no bullets or \
 numbering.
 
-RECORD ONLY stable facts they stated about themselves:
+RECORD ONLY stable facts the person stated about THEMSELVES — their own life, \
+work and circumstances:
 - their name, if they gave one, recorded as "name: " followed by it
 - what they are working on, studying, building or dealing with
 - ongoing commitments, constraints and circumstances
 - stated preferences and decisions
 
 DO NOT RECORD:
-- questions they asked. "How do I stay focused?" is a question, not a fact \
-about them. Asking about a topic does not make the topic a property of the \
-person.
-- anything Fischl said, advised or decreed
-- anything you inferred rather than were told
-- transient states, pleasantries or conversational filler
+- anything they asked for or told you to do. A question, a request and an \
+instruction are alike here: they describe what the person WANTS, not what the \
+person IS. "How do I stay focused?" is a question, not a fact about them, and \
+asking for something to be built is not a statement that they are building it.
+- anything about Fischl or Oz. This dossier concerns the person alone. What \
+the characters said, did, or seemed to want belongs nowhere in it, and neither \
+do the person's remarks about them.
+- anything you inferred rather than were told.
+- transient states, pleasantries or conversational filler.
 - padding: never state the same fact twice in different words.
 
 NEVER invent a value. If the person has not told you their name, the dossier
